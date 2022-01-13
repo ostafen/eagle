@@ -1,5 +1,8 @@
 # EagleDB
 
+[![codecov](https://codecov.io/gh/ostafen/eagle/branch/main/graph/badge.svg?token=AEP3KOEXLG)](https://codecov.io/gh/ostafen/eagle)
+[![Go Reference](https://pkg.go.dev/badge/badge/github.com/ostafen/eagle.svg)](https://pkg.go.dev/github.com/ostafen/eagle)
+
 EagleDB is a fast and simple key-value store written in Golang. Design choices have been inspired by [HaloDB](https://github.com/yahoo/HaloDB).
 
 # Usage
