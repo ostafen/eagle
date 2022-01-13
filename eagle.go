@@ -60,6 +60,15 @@ func zeroPad(s string, n int) string {
 	return s
 }
 
+func (db *DB) createNewLogFile() (*logFile, error) {
+	newFile, err := createLogFile(db.rootDir, db.getNextFileId())
+	if err != nil {
+		return nil, err
+	}
+	db.addFileToMap(newFile)
+	return newFile, nil
+}
+
 func (db *DB) rotateLogFile() error {
 	if db.currWriteFile != nil {
 		if err := db.currWriteFile.Sync(); err != nil {
@@ -67,12 +76,11 @@ func (db *DB) rotateLogFile() error {
 		}
 	}
 
-	newFile, err := createLogFile(db.rootDir, db.getNextFileId())
+	newFile, err := db.createNewLogFile()
 	if err != nil {
 		return err
 	}
 	db.currWriteFile = newFile
-	db.addFileToMap(newFile)
 	return nil
 }
 
