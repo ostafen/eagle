@@ -16,7 +16,7 @@ func decryptFileIfNeeded(data []byte) ([]byte, error) {
 	}
 
 	iv, encryptedData := data[:16], data[16:]
-	cipher := crypto.NewBlockCypher(dbOptions.EncryptKey, iv)
+	cipher := crypto.NewCipher(dbOptions.EncryptKey, iv)
 	return cipher.Decrypt(encryptedData)
 }
 
@@ -49,7 +49,7 @@ func encryptFileIfNeeded(bytes []byte) ([]byte, error) {
 		return bytes, err
 	}
 
-	cipher := crypto.NewBlockCypher(dbOptions.EncryptKey, iv)
+	cipher := crypto.NewCipher(dbOptions.EncryptKey, iv)
 	encrypted, err := cipher.Encrypt(bytes)
 	if err != nil {
 		return nil, err

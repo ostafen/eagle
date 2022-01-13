@@ -29,7 +29,7 @@ func getCypher(iv []byte) *crypto.Cipher {
 	if !dbOptions.UseEncryption() {
 		return nil
 	}
-	return crypto.NewBlockCypher(dbOptions.EncryptKey, iv)
+	return crypto.NewCipher(dbOptions.EncryptKey, iv)
 }
 
 func getSize(file *os.File) (uint32, error) {
