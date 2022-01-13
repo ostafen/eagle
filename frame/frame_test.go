@@ -1,7 +1,12 @@
 package frame
 
 import (
+	"bytes"
+	"log"
 	"math/rand"
+	"testing"
+
+	"github.com/ostafen/eagle/crypto"
 )
 
 const bufSize = 1024
@@ -15,7 +20,6 @@ func getRandomBytes(size int) []byte {
 
 type payload []byte
 
-/*
 func TestFrameReadWriter(t *testing.T) {
 	secret := getRandomBytes(16)
 
@@ -28,7 +32,7 @@ func TestFrameReadWriter(t *testing.T) {
 	var buf bytes.Buffer
 	frames := make([]payload, 0, nFrames)
 	for i := 0; i < nFrames; i++ {
-		cipher := crypto.NewBlockCypher(secret, )
+		cipher := crypto.NewCipher(secret, iv)
 
 		data := getRandomBytes(rand.Intn(bufSize) + 10)
 
@@ -42,7 +46,7 @@ func TestFrameReadWriter(t *testing.T) {
 
 	offset = int64(0)
 	for i := 0; i < nFrames; i++ {
-		cipher := crypto.NewBlockCypher(secret, iv, offset)
+		cipher := crypto.NewCipher(secret, iv)
 
 		n, frame, err := Decode(&buf, cipher)
 		if err != nil {
@@ -55,4 +59,3 @@ func TestFrameReadWriter(t *testing.T) {
 		offset += int64(n)
 	}
 }
-*/
