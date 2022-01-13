@@ -436,10 +436,6 @@ func (db *DB) readFile(ptr *DiskPointer) ([]byte, error) {
 
 // Get returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	if len(key) > keySizeMax {
-		return nil, nil
-	}
-
 	ptr, _ := db.table.Get(key)
 	if ptr == nil {
 		return nil, nil
@@ -471,9 +467,6 @@ func (db *DB) writeTombstone(key []byte, seqNumber uint64) error {
 
 // Remove removes the mapping for a key from the map if it is present.
 func (db *DB) Remove(key []byte) error {
-	if len(key) > keySizeMax {
-		return errKeySize
-	}
 	db.writeLock.Lock()
 	defer db.writeLock.Unlock()
 
