@@ -128,22 +128,27 @@ func (db *DB) addFileToMap(file *logFile) {
 	db.fileMapLock.Unlock()
 }
 
-func (db *DB) openLogFiles() error {
+func (db *DB) openLogFiles() (uint32, error) {
 	filenames, err := util.ListDir(db.rootDir, dataFileExt)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
+	maxFileId := uint32(0)
 	for _, filename := range filenames {
 		fileId, _ := getFileId(filename)
 		file, err := openLogFile(db.rootDir, fileId)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		db.fileMap[fileId] = file
+
+		if fileId > maxFileId {
+			maxFileId = fileId
+		}
 	}
-	return nil
+	return maxFileId, nil
 }
 
 func (db *DB) processIndexFiles() error {
@@ -254,10 +259,11 @@ func Open(opts Options) (*DB, error) {
 	}
 	db.compactor = newFileCompactor(db)
 
-	err := db.openLogFiles()
+	maxFileId, err := db.openLogFiles()
 	if err != nil {
 		return nil, err
 	}
+	db.nextFileId.Set(int32(maxFileId + 1))
 
 	manifest, err := openManifestFile(db.rootDir)
 	if err != nil {
