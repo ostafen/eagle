@@ -48,6 +48,22 @@ func newFileCompactor(db *DB) *fileCompactor {
 	}
 }
 
+func (fc *fileCompactor) rotateCurrentFile() error {
+	if fc.currWriteFile != nil {
+		if err := fc.currWriteFile.Sync(); err != nil {
+			return err
+		}
+	}
+
+	newFile, err := fc.db.createNewLogFile()
+	if err != nil {
+		return err
+	}
+	fc.currWriteFile = newFile
+	fc.setCompacting(fc.currWriteFile)
+	return nil
+}
+
 func (fc *fileCompactor) setCompacting(file *logFile) error {
 	if fc.currWriteFile != nil {
 		compactRegistry := &compactRegistry{
@@ -72,25 +88,71 @@ func (fc *fileCompactor) setCompacted(file *logFile) error {
 	return nil
 }
 
+func (fc *fileCompactor) ensureRoomForWrite(size uint32) error {
+	if fc.currWriteFile == nil || fc.currWriteFile.Size()+size > fc.db.opts.MaxFileSize {
+		if err := fc.rotateCurrentFile(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (fc *fileCompactor) compactFile(file *logFile) error {
 	if err := fc.setCompacting(file); err != nil {
 		return err
 	}
 
-	nProcessed := 0
+	nRecordCopied := 0
 	it := file.indexFile.Iterator()
 	for it.HasNext() {
-		_, err := it.Next()
-
+		entry, err := it.Next()
 		if err != nil {
-			log.Println("err: ", err)
 			return err
 		}
 
-		nProcessed++
+		ptr, seqNumber := fc.db.table.Get(entry.Key)
+		if ptr != nil && entry.SeqNumber == seqNumber { // record is not stale
+			if err := fc.ensureRoomForWrite(entry.FrameSize); err != nil {
+				return err
+			}
+
+			frameData := make([]byte, entry.FrameSize)
+			if _, err := file.dataFile.ReadAt(frameData, int64(entry.FrameOffset)); err != nil {
+				return err
+			}
+
+			writeOffset := fc.currWriteFile.dataFile.size
+			if _, err = fc.currWriteFile.dataFile.Write(frameData); err != nil {
+				return err
+			}
+
+			newEntry := &indexEntry{
+				SeqNumber:   entry.SeqNumber,
+				FrameOffset: writeOffset,
+				FrameSize:   entry.FrameSize,
+				Key:         entry.Key,
+			}
+
+			if _, err = fc.currWriteFile.indexFile.AppendEntry(newEntry); err != nil {
+				return err
+			}
+
+			newPtr := indexEntryToDiskPointer(newEntry, fc.currWriteFile.FileId)
+			if _, ok := fc.db.table.Swap(entry.Key, entry.SeqNumber, newPtr); ok {
+				nRecordCopied++
+			} else {
+				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.FrameSize)
+			}
+		}
 	}
 
-	log.Println("compaction: processed ", nProcessed)
+	if nRecordCopied > 0 {
+		if err := fc.currWriteFile.Sync(); err != nil {
+			return err
+		}
+	}
+
+	log.Printf("completed compaction of file with id %d: copied %d records.\n", file.FileId, nRecordCopied)
 
 	return fc.setCompacted(file)
 }
@@ -118,6 +180,7 @@ func (fc *fileCompactor) start() {
 
 func (fc *fileCompactor) closeFile() error {
 	if fc.currWriteFile != nil {
+		log.Println("syncing compaction file with id ", fc.currWriteFile.FileId)
 		return fc.currWriteFile.SyncAndClose()
 	}
 	return nil
@@ -136,7 +199,6 @@ func (fc *fileCompactor) markAsCompacted(fileId uint32) {
 }
 
 func (fc *fileCompactor) sendFile(file *logFile) bool {
-
 	fc.lock.Lock()
 	defer fc.lock.Unlock()
 
