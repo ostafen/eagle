@@ -12,7 +12,7 @@ type node struct {
 	seqNumber uint64
 	key       []byte
 	next      *node
-	ptr       *DiskPointer
+	ptr       *ValuePointer
 }
 
 type tablePartition struct {
@@ -45,7 +45,7 @@ func newMemTable() *memTable {
 	}
 }
 
-func (t *memTable) Get(key []byte) (*DiskPointer, uint64) {
+func (t *memTable) Get(key []byte) (*ValuePointer, uint64) {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -55,7 +55,18 @@ func (t *memTable) Get(key []byte) (*DiskPointer, uint64) {
 	return t.partitions[p].get(key, hash)
 }
 
-func (t *memTable) Put(key []byte, seqNumber uint64, ptr *DiskPointer) *DiskPointer {
+func (t *memTable) Remove(key []byte, seqNumber uint64) *ValuePointer {
+	hash := hashKey(key)
+
+	p := hash >> 28
+
+	t.locks[p].Lock()
+	defer t.locks[p].Unlock()
+
+	return t.partitions[p].remove(key, seqNumber, hash)
+}
+
+func (t *memTable) Put(key []byte, seqNumber uint64, ptr *ValuePointer) (*ValuePointer, bool) {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -64,28 +75,6 @@ func (t *memTable) Put(key []byte, seqNumber uint64, ptr *DiskPointer) *DiskPoin
 	defer t.locks[p].Unlock()
 
 	return t.partitions[p].put(key, seqNumber, ptr, hash)
-}
-
-func (t *memTable) Remove(key []byte) *DiskPointer {
-	hash := hashKey(key)
-
-	p := hash >> 28
-
-	t.locks[p].Lock()
-	defer t.locks[p].Unlock()
-
-	return t.partitions[p].remove(key, hash)
-}
-
-func (t *memTable) Swap(key []byte, seqNumber uint64, ptr *DiskPointer) (*DiskPointer, bool) {
-	hash := hashKey(key)
-
-	p := hash >> 28
-
-	t.locks[p].Lock()
-	defer t.locks[p].Unlock()
-
-	return t.partitions[p].swap(key, seqNumber, ptr, hash)
 }
 
 func (t *memTable) ContainsKey(key []byte) bool {
@@ -148,7 +137,7 @@ func (t *tablePartition) completeResize() {
 	t.nextResizeIndex = -1
 }
 
-func (t *tablePartition) get(key []byte, hash uint32) (*DiskPointer, uint64) {
+func (t *tablePartition) get(key []byte, hash uint32) (*ValuePointer, uint64) {
 	_, _, nd := t.findNode(key, hash)
 	if nd != nil {
 		return nd.ptr, nd.seqNumber
@@ -156,41 +145,11 @@ func (t *tablePartition) get(key []byte, hash uint32) (*DiskPointer, uint64) {
 	return nil, 0
 }
 
-func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *DiskPointer, hash uint32) *DiskPointer {
-	t.resizeStep()
-
-	_, _, currNode := t.findNode(key, hash)
-
-	if currNode == nil {
-		currNode = &node{key: key}
-
-		if t.resizeInProgress {
-			bucketHash := hash % uint32(len(t.buckets[1]))
-			currNode.next = t.buckets[1][bucketHash]
-			t.buckets[1][bucketHash] = currNode
-		} else {
-			bucketHash := hash % uint32(len(t.buckets[0]))
-			currNode.next = t.buckets[0][bucketHash]
-			t.buckets[0][bucketHash] = currNode
-		}
-
-		t.nElements.Inc()
-	}
-
-	old := currNode.ptr
-	currNode.seqNumber = seqNumber
-	currNode.ptr = ptr
-
-	t.resizeIfNeeded()
-
-	return old
-}
-
 // replace with Swap(key, value, func(oldValue, newValue) bool)
-func (t *tablePartition) swap(key []byte, seqNumber uint64, ptr *DiskPointer, hash uint32) (*DiskPointer, bool) {
+func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, hash uint32) (*ValuePointer, bool) {
 	t.resizeStep()
 
-	_, _, currNode := t.findNode(key, hash)
+	bucketIndex, prevNode, currNode := t.findNode(key, hash)
 
 	if currNode == nil {
 		currNode = &node{key: key}
@@ -210,8 +169,20 @@ func (t *tablePartition) swap(key []byte, seqNumber uint64, ptr *DiskPointer, ha
 
 	if seqNumber >= currNode.seqNumber {
 		prev := currNode.ptr
-		currNode.seqNumber = seqNumber
-		currNode.ptr = ptr
+
+		if ptr == nil { // unlink if value is nil
+			if prevNode != nil {
+				prevNode.next = currNode.next
+			} else {
+				bucketHash := hash % uint32(len(t.buckets[bucketIndex]))
+				t.buckets[bucketIndex][bucketHash] = currNode.next
+			}
+
+		} else {
+			currNode.seqNumber = seqNumber
+			currNode.ptr = ptr
+		}
+
 		t.resizeIfNeeded()
 
 		return prev, true
@@ -268,23 +239,24 @@ func (t *tablePartition) containsKey(key []byte, hash uint32) bool {
 	return ptr != nil
 }
 
-func (t *tablePartition) remove(key []byte, hash uint32) *DiskPointer {
+func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *ValuePointer {
 	t.resizeStep()
 
-	bucketIndex, prev, nd := t.findNode(key, hash)
+	_, _, nd := t.findNode(key, hash)
 	if nd == nil {
 		return nil
 	}
 
-	if prev != nil {
-		prev.next = nd.next
-	} else {
-		bucketHash := hash % uint32(len(t.buckets[bucketIndex]))
-		t.buckets[bucketIndex][bucketHash] = nd.next
+	if seqNum >= nd.seqNumber {
+		removePtr := nd.ptr
+
+		nd.ptr = nil
+
+		if removePtr != nil {
+			t.nElements.Add(-1)
+		}
+		return removePtr
 	}
 
-	t.nElements.Add(-1)
-
-	t.resizeIfNeeded()
-	return nd.ptr
+	return nil
 }

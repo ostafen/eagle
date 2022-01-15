@@ -103,45 +103,47 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 	}
 
 	nRecordCopied := 0
-	it := file.indexFile.Iterator()
+	it := file.keyFile.Iterator()
 	for it.HasNext() {
-		entry, err := it.Next()
+		entry, _, err := it.Next()
 		if err != nil {
 			return err
 		}
 
-		ptr, seqNumber := fc.db.table.Get(entry.Key)
-		if ptr != nil && entry.SeqNumber == seqNumber { // record is not stale
-			if err := fc.ensureRoomForWrite(entry.FrameSize); err != nil {
+		_, seqNumber := fc.db.table.Get(entry.Key)
+		if entry.SeqNumber == seqNumber { // record is not stale
+			if err := fc.ensureRoomForWrite(entry.ValueSize); err != nil {
 				return err
 			}
 
-			frameData := make([]byte, entry.FrameSize)
-			if _, err := file.dataFile.ReadAt(frameData, int64(entry.FrameOffset)); err != nil {
+			value := make([]byte, entry.ValueSize)
+			if _, err := file.valueFile.ReadAt(value, int64(entry.ValueOffset)); err != nil {
 				return err
 			}
 
-			writeOffset := fc.currWriteFile.dataFile.size
-			if _, err = fc.currWriteFile.dataFile.Write(frameData); err != nil {
+			writeOffset := fc.currWriteFile.valueFile.size
+			if _, err = fc.currWriteFile.valueFile.Write(value); err != nil {
 				return err
 			}
 
-			newEntry := &indexEntry{
-				SeqNumber:   entry.SeqNumber,
-				FrameOffset: writeOffset,
-				FrameSize:   entry.FrameSize,
-				Key:         entry.Key,
-			}
-
-			if _, err = fc.currWriteFile.indexFile.AppendEntry(newEntry); err != nil {
+			r := &Record{Key: entry.Key, Value: value, SeqNumber: entry.SeqNumber}
+			if _, err = fc.currWriteFile.AppendRecord(r); err != nil {
 				return err
 			}
 
-			newPtr := indexEntryToDiskPointer(newEntry, fc.currWriteFile.FileId)
-			if _, ok := fc.db.table.Swap(entry.Key, entry.SeqNumber, newPtr); ok {
+			var newPtr *ValuePointer
+			if entry.ValueSize > 0 {
+				newPtr = &ValuePointer{
+					FileId:      fc.currWriteFile.FileId,
+					frameOffset: writeOffset,
+					frameSize:   entry.ValueSize,
+				}
+			}
+
+			if _, ok := fc.db.table.Put(entry.Key, entry.SeqNumber, newPtr); ok {
 				nRecordCopied++
 			} else {
-				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.FrameSize)
+				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.ValueSize)
 			}
 		}
 	}

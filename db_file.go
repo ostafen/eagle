@@ -142,6 +142,21 @@ func (f *dbFile) Size() uint32 {
 
 const repairFileExt = ".repair"
 
-func (f *dbFile) createRepairFile() (*dbFile, error) {
-	return createDBFile(f.Name() + repairFileExt)
+func (file *dbFile) createRepairFile() (*dbFile, error) {
+	repairFile, err := os.Create(file.File.Name() + repairFileExt)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(file.iv) > 0 {
+		if _, err := repairFile.Write(file.iv); err != nil {
+			return nil, err
+		}
+	}
+
+	return &dbFile{
+		File: repairFile,
+		size: uint32(len(file.iv)),
+		iv:   file.iv,
+	}, nil
 }

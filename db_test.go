@@ -102,12 +102,12 @@ func TestWritesAndReload(t *testing.T) {
 	}
 	runCheck(e)
 
-	log.Println("check ok")
-
 	err = e.Close()
 	if err != nil {
 		log.Fatal("close", err)
 	}
+
+	log.Println("after opening")
 
 	e, err = Open(opts)
 	if err != nil {
@@ -177,6 +177,7 @@ func TestInsertRemove(t *testing.T) {
 	}
 
 	runCheck(e)
+	log.Println(e.Size())
 
 	err = e.Close()
 	if err != nil {
@@ -189,6 +190,8 @@ func TestInsertRemove(t *testing.T) {
 	}
 
 	runCheck(e)
+
+	log.Println(e.Size())
 
 	err = e.Close()
 	if err != nil {

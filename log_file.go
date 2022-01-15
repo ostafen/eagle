@@ -8,8 +8,8 @@ import (
 
 type logFile struct {
 	FileId    uint32
-	dataFile  *DataFile
-	indexFile *indexFile
+	valueFile *valueLog
+	keyFile   *keyLog
 }
 
 func createLogFile(path string, fileId uint32) (*logFile, error) {
@@ -18,15 +18,15 @@ func createLogFile(path string, fileId uint32) (*logFile, error) {
 		return nil, err
 	}
 
-	indexFile, err := createIndexFile(path, fileId)
+	indexFile, err := createKeyLogFile(path, fileId)
 	if err != nil {
 		return nil, err
 	}
 
 	return &logFile{
 		FileId:    uint32(fileId),
-		dataFile:  dataFile,
-		indexFile: indexFile,
+		valueFile: dataFile,
+		keyFile:   indexFile,
 	}, nil
 }
 
@@ -36,104 +36,135 @@ func openLogFile(path string, fileId uint32) (*logFile, error) {
 		return nil, err
 	}
 
-	indexFile, err := openIndexFile(path, fileId)
+	indexFile, err := openKeyLogFile(path, fileId)
 	if err != nil {
 		return nil, err
 	}
 
 	return &logFile{
 		FileId:    uint32(fileId),
-		dataFile:  dataFile,
-		indexFile: indexFile,
+		valueFile: dataFile,
+		keyFile:   indexFile,
 	}, nil
 }
 
-func (lf *logFile) IterateData() *DataFileIterator {
-	return lf.dataFile.Iterator()
+func (lf *logFile) IterateKeys() *keyFileIterator {
+	return lf.keyFile.Iterator()
 }
 
-func (lf *logFile) IterateIndex() *indexFileIterator {
-	return lf.indexFile.Iterator()
-}
-
-func (lf *logFile) ReadPointer(ptr *DiskPointer) ([]byte, error) {
-	return lf.dataFile.ReadPointer(ptr)
-}
-
-func pointerToIndexEntry(key []byte, seqNumber uint64, ptr *DiskPointer) *indexEntry {
-	return &indexEntry{
-		SeqNumber:   seqNumber,
-		FrameOffset: ptr.frameOffset,
-		FrameSize:   ptr.frameSize,
-		Key:         key,
-	}
-}
-
-func (lf *logFile) AppendRecord(r *Record) (*DiskPointer, error) {
-	ptr, err := lf.dataFile.AppendRecord(r)
+func (lf *logFile) ReadPointer(ptr *ValuePointer) ([]byte, error) {
+	value := make([]byte, ptr.frameSize)
+	_, err := lf.valueFile.ReadAt(value, int64(ptr.frameOffset))
 	if err != nil {
 		return nil, err
 	}
 
-	e := pointerToIndexEntry(r.Key, r.SeqNumber, ptr)
-	_, err = lf.indexFile.AppendEntry(e)
+	if dbOptions.UseEncryption() {
+		cipher := getCypher(getIV(lf.valueFile.iv, ptr.frameOffset))
+		value, err = cipher.Decrypt(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return value, nil
+}
+
+func (lf *logFile) AppendRecord(r *Record) (*ValuePointer, error) {
+	valueOffset := lf.valueFile.size
+
+	e := &klEntry{
+		SeqNumber:   r.SeqNumber,
+		Key:         r.Key,
+		ValueOffset: valueOffset,
+		ValueSize:   uint32(len(r.Value)),
+	}
+
+	cipher := getCypher(getIV(lf.valueFile.iv, valueOffset))
+
+	value := r.Value
+	value, err := cipher.Encrypt(value)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err = lf.keyFile.AppendEntry(e, value); err != nil {
+		return nil, err
+	}
+
+	if len(r.Value) == 0 { // writing tombstone record
+		return nil, nil
+	}
+
+	ptr := &ValuePointer{
+		FileId:      lf.FileId,
+		frameOffset: valueOffset,
+		frameSize:   uint32(len(r.Value)),
+		keySize:     byte(len(r.Key)),
+	}
+
+	_, err = lf.valueFile.Write(value)
+	if err != nil {
+		return nil, err
+	}
+
 	return ptr, err
 }
 
 func (lf *logFile) Sync() error {
-	if err := lf.dataFile.Sync(); err != nil {
+	if err := lf.valueFile.Sync(); err != nil {
 		return err
 	}
-	return lf.indexFile.Sync()
+	return lf.keyFile.Sync()
 }
 
 func (lf *logFile) SyncAndClose() error {
-	if err := lf.dataFile.SyncAndClose(); err != nil {
+	if err := lf.valueFile.SyncAndClose(); err != nil {
 		return err
 	}
 
-	return lf.indexFile.SyncAndClose()
+	return lf.keyFile.SyncAndClose()
 }
 
 func (lf *logFile) UpdateStaleSize(size uint32) {
-	lf.dataFile.staleDataSize += size
+	lf.valueFile.staleDataSize += size
 }
 
 func (lf *logFile) Size() uint32 {
-	return lf.dataFile.Size()
+	return lf.keyFile.Size() + lf.valueFile.Size()
 }
 
 func (lf *logFile) Close() error {
-	if err := lf.dataFile.Close(); err != nil {
+	if err := lf.valueFile.Close(); err != nil {
 		return err
 	}
-	return lf.indexFile.Close()
+	return lf.keyFile.Close()
 }
 
 func (lf *logFile) remove() error {
 	lf.Close()
 
-	if err := lf.indexFile.Remove(); err != nil {
+	if err := lf.keyFile.Remove(); err != nil {
 		return err
 	}
 
-	return lf.dataFile.Remove()
+	return lf.valueFile.Remove()
 }
 
 func (lf *logFile) createRepairFile() (*logFile, error) {
-	dataFile, err := lf.dataFile.createRepairFile()
+	valueFile, err := lf.valueFile.createRepairFile()
 	if err != nil {
 		return nil, err
 	}
-	indexFile, err := lf.indexFile.createRepairFile()
+	keyFile, err := lf.keyFile.createRepairFile()
 	if err != nil {
 		return nil, err
 	}
 
 	return &logFile{
 		FileId:    lf.FileId,
-		dataFile:  dataFile,
-		indexFile: indexFile,
+		valueFile: valueFile,
+		keyFile:   keyFile,
 	}, nil
 }
 
@@ -145,36 +176,55 @@ func (lf *logFile) repair() (*logFile, error) {
 
 	nCopied := 0
 
-	it := lf.dataFile.Iterator()
+	it := lf.IterateKeys()
 	for it.HasNext() {
-		_, r, err := it.Next()
+		entry, checksum, err := it.Next()
 		if err != nil {
 			break
 		}
 
-		_, err = newFile.AppendRecord(r)
-		if err != nil {
+		// the entry is damaged and report an incorrect size
+		if entry.ValueOffset+entry.ValueSize > lf.valueFile.size {
+			break
+		}
+
+		value := make([]byte, entry.ValueSize)
+		if _, err = lf.valueFile.Read(value); err != nil {
 			return nil, err
 		}
+
+		if computeChecksum(getHeaderFromEntry(entry), entry.Key, value) != checksum {
+			break
+		}
+
+		if _, err = newFile.keyFile.AppendEntry(entry, value); err != nil {
+			return nil, err
+		}
+
+		if _, err = newFile.valueFile.Write(value); err != nil {
+			return nil, err
+		}
+
 		nCopied++
 	}
+
 	log.Printf("Repairing file: %d. Copied %d records\n", lf.FileId, nCopied)
 
 	if err := newFile.SyncAndClose(); err != nil {
 		return nil, err
 	}
 
-	err = os.Rename(newFile.dataFile.Name(), lf.dataFile.Name())
+	err = os.Rename(newFile.valueFile.Name(), lf.valueFile.Name())
 	if err != nil {
 		return nil, err
 	}
 
-	err = os.Rename(newFile.indexFile.Name(), lf.indexFile.Name())
+	err = os.Rename(newFile.keyFile.Name(), lf.keyFile.Name())
 	if err != nil {
 		return nil, err
 	}
 
 	lf.Close()
 
-	return openLogFile(filepath.Dir(lf.dataFile.Name()), newFile.FileId)
+	return openLogFile(filepath.Dir(lf.valueFile.Name()), newFile.FileId)
 }

@@ -29,8 +29,7 @@ type DB struct {
 	nextSeqNumber uint64
 	nextFileId    util.AtomicInt32
 
-	currTombstoneFile *tombstoneFile
-	currWriteFile     *logFile
+	currWriteFile *logFile
 
 	compactor   *fileCompactor
 	fileMapLock sync.Mutex
@@ -84,23 +83,8 @@ func (db *DB) rotateLogFile() error {
 	return nil
 }
 
-func (db *DB) rotateTombstoneFile() error {
-	if db.currTombstoneFile != nil {
-		if err := db.currTombstoneFile.SyncAndClose(); err != nil {
-			return err
-		}
-	}
-
-	newFile, err := createTombstoneFile(db.rootDir, db.getNextFileId())
-	if err != nil {
-		return err
-	}
-	db.currTombstoneFile = newFile
-	return nil
-}
-
 func (db *DB) compactIfNeeded(fileId uint32, fileStaleSize uint32, fileSize uint32) {
-	if float32(fileStaleSize) >= float32(fileSize)*db.opts.FileCompactionThreshold {
+	if float64(fileStaleSize) >= float64(fileSize)*db.opts.FileCompactionThreshold {
 		if db.compactor.sendFile(db.fileMap[fileId]) {
 			delete(db.staleDataMap, fileId)
 		}
@@ -129,7 +113,7 @@ func (db *DB) addFileToMap(file *logFile) {
 }
 
 func (db *DB) openLogFiles() (uint32, error) {
-	filenames, err := util.ListDir(db.rootDir, dataFileExt)
+	filenames, err := util.ListDir(db.rootDir, valueLogFileExt)
 	if err != nil {
 		return 0, err
 	}
@@ -153,18 +137,18 @@ func (db *DB) openLogFiles() (uint32, error) {
 
 func (db *DB) processIndexFiles() error {
 	nTasks := runtime.NumCPU()
-	tasks := make([]*indexFileTask, nTasks)
+	tasks := make([]*keyFileProcessTask, nTasks)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(nTasks)
 	for i := 0; i < nTasks; i++ {
-		tasks[i] = newIndexTask(db, wg)
+		tasks[i] = newKeyFileProcessTask(db, wg)
 		tasks[i].start()
 	}
 
 	i := 0
 	for _, file := range db.fileMap {
-		tasks[i].fileChan <- file.indexFile
+		tasks[i].fileChan <- file.keyFile
 		i = (i + 1) % nTasks
 	}
 
@@ -191,54 +175,8 @@ func (db *DB) processIndexFiles() error {
 	return nil
 }
 
-func (db *DB) processTombstoneFiles() error {
-	filenames, err := util.ListDir(db.rootDir, tombstoneFileExt)
-	if err != nil {
-		return err
-	}
-
-	nTasks := runtime.NumCPU()
-	tasks := make([]*tombstoneFileTask, nTasks)
-
-	wg := &sync.WaitGroup{}
-	wg.Add(nTasks)
-	for i := 0; i < nTasks; i++ {
-		tasks[i] = newTombstoneFileTask(db, wg)
-		tasks[i].start()
-	}
-
-	i := 0
-	for _, file := range filenames {
-		tasks[i].fileChan <- file
-		i = (i + 1) % nTasks
-	}
-
-	for i := 0; i < nTasks; i++ {
-		tasks[i].fileChan <- "quit"
-	}
-
-	// waiting for all loaders to exit successfully
-	wg.Wait()
-
-	for _, t := range tasks {
-		if t.err != nil {
-			return t.err
-		}
-
-		if t.maxSeqNumber > db.nextSeqNumber {
-			db.nextSeqNumber = t.maxSeqNumber
-		}
-	}
-	return nil
-
-}
-
 func (db *DB) recoverFromDisk() error {
-	if err := db.processIndexFiles(); err != nil {
-		return err
-	}
-
-	return db.processTombstoneFiles()
+	return db.processIndexFiles()
 }
 
 // Open create a new Eagle instance in the target directory and loads existing data from disk.
@@ -263,7 +201,7 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.nextFileId.Set(int32(maxFileId + 1))
+	db.nextFileId.Set(int32(maxFileId))
 
 	manifest, err := openManifestFile(db.rootDir)
 	if err != nil {
@@ -328,7 +266,9 @@ func (db *DB) repairFiles() error {
 
 	if file != nil {
 		repairedFile, err := file.repair()
-		db.fileMap[repairedFile.FileId] = repairedFile
+		if err == nil {
+			db.fileMap[repairedFile.FileId] = repairedFile
+		}
 		return err
 	}
 
@@ -377,12 +317,6 @@ func (db *DB) Close() error {
 
 	db.closeAllFiles()
 
-	if db.currTombstoneFile != nil {
-		if err := db.currTombstoneFile.SyncAndClose(); err != nil {
-			db.manifest.IOError = true
-		}
-	}
-
 	db.manifest.DBOpen = false
 	return db.manifest.Save(db.rootDir)
 }
@@ -406,7 +340,7 @@ func (db *DB) ensureRoomForWrite(size uint32) error {
 	return nil
 }
 
-func (db *DB) writeRecordToFile(r *Record) (*DiskPointer, error) {
+func (db *DB) writeRecordToFile(r *Record) (*ValuePointer, error) {
 	if err := db.ensureRoomForWrite(uint32(RecordSize(len(r.Key), len(r.Value)))); err != nil {
 		return nil, err
 	}
@@ -425,14 +359,19 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	seqNumber := db.getSeqNumber()
 	ptr, err := db.writeRecordToFile(&Record{Key: key, Value: value, SeqNumber: seqNumber})
-	oldPtr, _ := db.table.Swap(key, seqNumber, ptr)
+	oldPtr, _ := db.table.Put(key, seqNumber, ptr)
+
 	if oldPtr != nil {
-		db.markPreviousAsStale(oldPtr.FileId, oldPtr.frameSize)
+		staleSize := oldPtr.frameSize
+		if staleSize == 0 { // record was marked as deleted
+			staleSize = RecordSize(len(key), 0)
+		}
+		db.markPreviousAsStale(oldPtr.FileId, staleSize)
 	}
 	return err
 }
 
-func (db *DB) readFile(ptr *DiskPointer) ([]byte, error) {
+func (db *DB) readFile(ptr *ValuePointer) ([]byte, error) {
 	db.fileMapLock.Lock()
 	file := db.fileMap[ptr.FileId]
 	db.fileMapLock.Unlock()
@@ -454,38 +393,27 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return value, err
 }
 
-func (db *DB) ensureRoomForWriteTombstone(entrySize uint32) error {
-	if db.currTombstoneFile == nil || db.currTombstoneFile.Size()+entrySize > db.opts.MaxTombstoneFileSize {
-		return db.rotateTombstoneFile()
-	}
-	return nil
-}
-
-func (db *DB) writeTombstone(key []byte, seqNumber uint64) error {
-	e := tombstoneEntry{Key: key, SeqNumber: seqNumber}
-
-	if err := db.ensureRoomForWriteTombstone(tombstoneFrameSize(len(key))); err != nil {
-		return err
-	}
-
-	return db.currTombstoneFile.WriteEntry(&e)
-}
-
 // Remove removes the mapping for a key from the map if it is present.
 func (db *DB) Remove(key []byte) error {
 	db.writeLock.Lock()
 	defer db.writeLock.Unlock()
 
-	ptr := db.table.Remove(key)
+	seqNumber := db.getSeqNumber()
+	ptr := db.table.Remove(key, seqNumber)
 	if ptr == nil {
 		return nil
 	}
 
 	db.markPreviousAsStale(ptr.FileId, ptr.frameSize)
-	return db.writeTombstone(key, db.getSeqNumber())
+	_, err := db.writeRecordToFile(&Record{Key: key, Value: nil, SeqNumber: seqNumber})
+	return err
 }
 
 // ContainsKey returns true if this map contains a mapping for the specified key.
-func (e *DB) ContainsKey(key []byte) bool {
-	return e.table.ContainsKey(key)
+func (db *DB) ContainsKey(key []byte) bool {
+	return db.table.ContainsKey(key)
+}
+
+func (db *DB) Size() int {
+	return db.table.Size()
 }
