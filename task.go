@@ -12,28 +12,35 @@ type keyFileProcessTask struct {
 	err      error
 	wg       *sync.WaitGroup
 
+	nProcessed   int
+	nTombstones  int
 	maxSeqNumber uint64
 }
 
 func (task *keyFileProcessTask) processFile(file *keyLog) error {
 	it := file.Iterator()
 
+	nProcessed := 0
+	nTombstones := 0
 	for it.HasNext() {
 		e, _, err := it.Next()
 		if err != nil {
-			log.Println("error", err)
+			log.Println("error ", file.fileId, file.size, it.readOffset)
 			return err
 		}
 
+		nProcessed++
 		ptr := getPointerFromEntry(e, file.fileId)
 
 		var prevInfo *recordInfo
+		rInfo := &recordInfo{seqNumber: e.SeqNumber, ptr: ptr}
 
-		if e.ValueSize > 0 {
-			prevInfo, _ = task.db.table.Update(e.Key, &recordInfo{seqNumber: e.SeqNumber, ptr: ptr})
-		} else {
-			prevInfo = task.db.table.Remove(e.Key, e.SeqNumber)
+		if e.ValueSize == 0 {
+			rInfo = rInfo.markDeleted(e.SeqNumber)
+			nTombstones++
 		}
+
+		prevInfo, _ = task.db.table.Update(e.Key, rInfo)
 
 		if prevInfo != nil {
 			task.db.markPreviousAsStale(file.fileId, recordSize(len(e.Key), int(e.ValueSize)))
@@ -44,6 +51,8 @@ func (task *keyFileProcessTask) processFile(file *keyLog) error {
 		}
 	}
 
+	task.nProcessed += nProcessed
+	task.nTombstones += nTombstones
 	return nil
 }
 
