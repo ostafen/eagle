@@ -421,7 +421,7 @@ func (db *DB) Remove(key []byte) error {
 	defer db.writeLock.Unlock()
 
 	seqNumber := db.getSeqNumber()
-	info := db.table.Remove(key, seqNumber)
+	info := db.table.MarkDeleted(key, seqNumber)
 	if info == nil {
 		return nil
 	}

@@ -71,7 +71,7 @@ func (t *memTable) Get(key []byte) *recordInfo {
 	return t.partitions[p].get(key, hash)
 }
 
-func (t *memTable) Remove(key []byte, seqNumber uint64) *recordInfo {
+func (t *memTable) MarkDeleted(key []byte, seqNumber uint64) *recordInfo {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -79,7 +79,7 @@ func (t *memTable) Remove(key []byte, seqNumber uint64) *recordInfo {
 	t.locks[p].Lock()
 	defer t.locks[p].Unlock()
 
-	return t.partitions[p].remove(key, seqNumber, hash)
+	return t.partitions[p].markDeleted(key, seqNumber, hash)
 }
 
 func (t *memTable) Update(key []byte, info *recordInfo) (*recordInfo, bool) {
@@ -162,9 +162,14 @@ func (t *tablePartition) get(key []byte, hash uint32) *recordInfo {
 }
 
 func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*recordInfo, bool) {
+	if info.ptr == nil {
+		info := t.remove(key, info.seqNumber, hash)
+		return info, info != nil
+	}
+
 	t.resizeStep()
 
-	bucketIndex, prevNode, currNode := t.findNode(key, hash)
+	_, _, currNode := t.findNode(key, hash)
 
 	if currNode == nil {
 		currNode = &node{key: key}
@@ -179,7 +184,9 @@ func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*rec
 			t.buckets[0][bucketHash] = currNode
 		}
 
-		t.nElements.Inc()
+		if !info.deleted() {
+			t.nElements.Inc()
+		}
 		t.nNodes.Inc()
 	}
 
@@ -189,24 +196,16 @@ func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*rec
 			return nil, false
 		}
 
-		if info.ptr == nil { // unlink if value is nil
-			if prevNode != nil {
-				prevNode.next = currNode.next
-			} else {
-				bucketHash := hash % uint32(len(t.buckets[bucketIndex]))
-				t.buckets[bucketIndex][bucketHash] = currNode.next
-			}
-			t.nNodes.Add(-1)
-		}
-
-		if prevInfo.deleted() && info.ptr != nil {
+		if prevInfo.deleted() && !info.deleted() {
 			t.nElements.Inc()
 		}
+
+		if !prevInfo.deleted() && info.deleted() {
+			t.nElements.Add(-1)
+		}
 	}
 
-	if info.ptr != nil {
-		currNode.rInfo = info
-	}
+	currNode.rInfo = info
 
 	t.resizeIfNeeded()
 	return prevInfo, true
@@ -256,7 +255,7 @@ func (t *tablePartition) containsKey(key []byte, hash uint32) bool {
 	return t.get(key, hash) != nil
 }
 
-func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *recordInfo {
+func (t *tablePartition) markDeleted(key []byte, seqNum uint64, hash uint32) *recordInfo {
 	t.resizeStep()
 
 	_, _, nd := t.findNode(key, hash)
@@ -271,6 +270,32 @@ func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *recordI
 			t.nElements.Add(-1)
 			return oldInfo
 		}
+	}
+	return nil
+}
+
+func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *recordInfo {
+	t.resizeStep()
+
+	bucketIndex, prevNode, currNode := t.findNode(key, hash)
+	if currNode == nil {
+		return nil
+	}
+
+	if seqNum >= currNode.rInfo.seqNumber {
+		if prevNode != nil {
+			prevNode.next = currNode.next
+		} else {
+			bucketHash := hash % uint32(len(t.buckets[bucketIndex]))
+			t.buckets[bucketIndex][bucketHash] = currNode.next
+		}
+
+		if !currNode.rInfo.deleted() {
+			t.nElements.Add(-1)
+		}
+		t.nNodes.Add(-1)
+		t.resizeIfNeeded()
+		return currNode.rInfo
 	}
 	return nil
 }
