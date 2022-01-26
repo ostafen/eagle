@@ -53,14 +53,14 @@ func (lf *logFile) IterateKeys() *keyFileIterator {
 }
 
 func (lf *logFile) ReadPointer(ptr *ValuePointer) ([]byte, error) {
-	value := make([]byte, ptr.frameSize)
-	_, err := lf.valueFile.ReadAt(value, int64(ptr.frameOffset))
+	value := make([]byte, ptr.valueSize)
+	_, err := lf.valueFile.ReadAt(value, int64(ptr.valueOffset))
 	if err != nil {
 		return nil, err
 	}
 
 	if dbOptions.UseEncryption() {
-		cipher := getCypher(getIV(lf.valueFile.iv, ptr.frameOffset))
+		cipher := getCypher(getIV(lf.valueFile.iv, ptr.valueOffset))
 		value, err = cipher.Decrypt(value)
 		if err != nil {
 			return nil, err
@@ -98,8 +98,8 @@ func (lf *logFile) AppendRecord(r *Record) (*ValuePointer, error) {
 
 	ptr := &ValuePointer{
 		FileId:      lf.FileId,
-		frameOffset: valueOffset,
-		frameSize:   uint32(len(r.Value)),
+		valueOffset: valueOffset,
+		valueSize:   uint32(len(r.Value)),
 		keySize:     byte(len(r.Key)),
 	}
 

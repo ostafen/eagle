@@ -362,7 +362,7 @@ func (db *DB) Put(key []byte, value []byte) error {
 	oldPtr, _ := db.table.Put(key, seqNumber, ptr)
 
 	if oldPtr != nil {
-		staleSize := oldPtr.frameSize
+		staleSize := oldPtr.valueSize
 		if staleSize == 0 { // record was marked as deleted
 			staleSize = RecordSize(len(key), 0)
 		}
@@ -404,7 +404,7 @@ func (db *DB) Remove(key []byte) error {
 		return nil
 	}
 
-	db.markPreviousAsStale(ptr.FileId, ptr.frameSize)
+	db.markPreviousAsStale(ptr.FileId, ptr.valueSize)
 	_, err := db.writeRecordToFile(&Record{Key: key, Value: nil, SeqNumber: seqNumber})
 	return err
 }

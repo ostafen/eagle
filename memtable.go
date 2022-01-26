@@ -21,6 +21,7 @@ type tablePartition struct {
 	nextResizeIndex int
 	buckets         [][]*node
 	nElements       util.AtomicInt32
+	nNodes          util.AtomicInt32
 }
 
 type memTable struct {
@@ -165,6 +166,7 @@ func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, ha
 		}
 
 		t.nElements.Inc()
+		t.nNodes.Inc()
 	}
 
 	if seqNumber >= currNode.seqNumber {
@@ -177,7 +179,7 @@ func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, ha
 				bucketHash := hash % uint32(len(t.buckets[bucketIndex]))
 				t.buckets[bucketIndex][bucketHash] = currNode.next
 			}
-
+			t.nNodes.Add(-1)
 		} else {
 			currNode.seqNumber = seqNumber
 			currNode.ptr = ptr
@@ -220,14 +222,12 @@ func (t *tablePartition) resizeIfNeeded() {
 		return
 	}
 
-	nElements := t.nElements.Get()
+	nNodes := t.nNodes.Get()
 	nBuckets := int32(len(t.buckets[0]))
-	if nElements > 5*nBuckets {
-
+	if nNodes > 5*nBuckets {
 		t.buckets[1] = make([]*node, 2*nBuckets)
 		t.resizeInProgress = true
-
-	} else if int(nElements) < int(nBuckets)/4 && nElements > initialBucketSize {
+	} else if int(nNodes) < int(nBuckets)/4 && nNodes > initialBucketSize {
 		t.buckets[1] = make([]*node, nBuckets/2)
 		t.resizeInProgress = true
 	}

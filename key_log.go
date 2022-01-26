@@ -214,8 +214,8 @@ func (it *keyFileIterator) Next() (*klEntry, uint32, error) {
 func getPointerFromEntry(e *klEntry, fileId uint32) *ValuePointer {
 	return &ValuePointer{
 		FileId:      fileId,
-		frameOffset: uint32(e.ValueOffset),
-		frameSize:   e.ValueSize,
+		valueOffset: uint32(e.ValueOffset),
+		valueSize:   e.ValueSize,
 		keySize:     byte(len(e.Key)),
 	}
 }

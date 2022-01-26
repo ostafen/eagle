@@ -8,8 +8,8 @@ type Record struct {
 
 type ValuePointer struct {
 	FileId      uint32
-	frameOffset uint32
-	frameSize   uint32
+	valueOffset uint32
+	valueSize   uint32
 	keySize     byte
 }
 

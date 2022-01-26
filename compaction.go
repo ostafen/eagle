@@ -135,8 +135,8 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 			if entry.ValueSize > 0 {
 				newPtr = &ValuePointer{
 					FileId:      fc.currWriteFile.FileId,
-					frameOffset: writeOffset,
-					frameSize:   entry.ValueSize,
+					valueOffset: writeOffset,
+					valueSize:   entry.ValueSize,
 				}
 			}
 
