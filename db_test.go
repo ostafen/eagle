@@ -1,6 +1,7 @@
 package eagle
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io/ioutil"
 	"log"
@@ -196,5 +197,113 @@ func TestInsertRemove(t *testing.T) {
 	err = e.Close()
 	if err != nil {
 		t.Fatal("get", err)
+	}
+}
+
+type Bytes []byte
+
+func TestUpdateSameKeys(t *testing.T) {
+	dbDir, err := ioutil.TempDir(".", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dbDir)
+
+	key := RandBytes(16)
+
+	// ensure to trigger file compaction very often
+	opts := DefaultOptions(dbDir).WithEncryptionKey(key).WithMaxFileSize(4096).WithFileCompactionThreshold(0.1)
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatal("get", err)
+	}
+	rand.Seed(time.Now().UnixNano())
+
+	keySpace := 100
+	keySize := 10
+	valueSize := 25
+
+	keys := make([]Bytes, keySpace)
+	for i := 0; i < keySpace; i++ {
+		keys[i] = RandBytes(keySize)
+	}
+
+	oracleMap := make(map[string]Bytes)
+	for i := 0; i < nRuns; i++ {
+		key := keys[rand.Intn(keySpace)]
+
+		if !bytes.Equal([]byte(string(key)), key) {
+			t.Fatal("conversion problem")
+		}
+
+		var value []byte = nil
+		if rand.Int()%2 == 0 {
+			value = RandBytes(valueSize)
+			oracleMap[string(key)] = value
+
+			if err := db.Put(key, value); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			oracleMap[string(key)] = nil // remember which keys have been deleted
+
+			if err := db.Remove(key); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		retrievedValue, err := db.Get(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !bytes.Equal(retrievedValue, value) {
+			t.Fatal("value mismatch")
+		}
+	}
+
+	sizeBeforeClose := db.Size()
+	mapSize := 0
+	for _, value := range oracleMap {
+		if value != nil {
+			mapSize++
+		}
+	}
+
+	if sizeBeforeClose != mapSize {
+		t.Fatalf("db size and map size mismatch: expected %d, found %d\n", sizeBeforeClose, mapSize)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatal("open", err)
+	}
+
+	if db.Size() != sizeBeforeClose {
+		t.Fatalf("db size after close is different: expected %d, found %d\n", sizeBeforeClose, db.Size())
+	}
+	defer db.Close()
+
+	deleted := 0
+	for _, value := range oracleMap {
+		if value == nil {
+			deleted++
+		}
+	}
+
+	for key, value := range oracleMap {
+		retrievedValue, err := db.Get([]byte(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !bytes.Equal(retrievedValue, value) {
+			log.Println(retrievedValue, value)
+			t.Fatal("value mismatch")
+		}
 	}
 }
