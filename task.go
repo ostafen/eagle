@@ -27,15 +27,15 @@ func (task *keyFileProcessTask) processFile(file *keyLog) error {
 
 		ptr := getPointerFromEntry(e, file.fileId)
 
-		var prevPtr *ValuePointer
+		var prevInfo *recordInfo
 
 		if e.ValueSize > 0 {
-			prevPtr, _ = task.db.table.Put(e.Key, e.SeqNumber, ptr)
+			prevInfo, _ = task.db.table.Put(e.Key, &recordInfo{seqNumber: e.SeqNumber, ptr: ptr})
 		} else {
-			prevPtr = task.db.table.Remove(e.Key, e.SeqNumber)
+			prevInfo = task.db.table.Remove(e.Key, e.SeqNumber)
 		}
 
-		if prevPtr != nil {
+		if prevInfo != nil {
 			task.db.markPreviousAsStale(file.fileId, recordSize(len(e.Key), int(e.ValueSize)))
 		}
 

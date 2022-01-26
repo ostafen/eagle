@@ -8,15 +8,26 @@ import (
 	"github.com/spaolacci/murmur3"
 )
 
-type node struct {
+type recordInfo struct {
 	seqNumber uint64
-	key       []byte
-	next      *node
 	ptr       *ValuePointer
 }
 
-func (nd *node) markDeleted() {
-	nd.ptr = nil
+func (info *recordInfo) markDeleted() *recordInfo {
+	newPtr := &ValuePointer{}
+	*newPtr = *info.ptr
+	newPtr.valueSize = 0
+	return &recordInfo{seqNumber: info.seqNumber, ptr: newPtr}
+}
+
+func (info *recordInfo) deleted() bool {
+	return info.ptr.valueSize == 0
+}
+
+type node struct {
+	key   []byte
+	next  *node
+	rInfo *recordInfo
 }
 
 type tablePartition struct {
@@ -50,7 +61,7 @@ func newMemTable() *memTable {
 	}
 }
 
-func (t *memTable) Get(key []byte) (*ValuePointer, uint64) {
+func (t *memTable) Get(key []byte) *recordInfo {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -60,7 +71,7 @@ func (t *memTable) Get(key []byte) (*ValuePointer, uint64) {
 	return t.partitions[p].get(key, hash)
 }
 
-func (t *memTable) Remove(key []byte, seqNumber uint64) *ValuePointer {
+func (t *memTable) Remove(key []byte, seqNumber uint64) *recordInfo {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -71,7 +82,7 @@ func (t *memTable) Remove(key []byte, seqNumber uint64) *ValuePointer {
 	return t.partitions[p].remove(key, seqNumber, hash)
 }
 
-func (t *memTable) Put(key []byte, seqNumber uint64, ptr *ValuePointer) (*ValuePointer, bool) {
+func (t *memTable) Put(key []byte, info *recordInfo) (*recordInfo, bool) {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -79,7 +90,7 @@ func (t *memTable) Put(key []byte, seqNumber uint64, ptr *ValuePointer) (*ValueP
 	t.locks[p].Lock()
 	defer t.locks[p].Unlock()
 
-	return t.partitions[p].put(key, seqNumber, ptr, hash)
+	return t.partitions[p].put(key, info, hash)
 }
 
 func (t *memTable) ContainsKey(key []byte) bool {
@@ -142,22 +153,22 @@ func (t *tablePartition) completeResize() {
 	t.nextResizeIndex = -1
 }
 
-func (t *tablePartition) get(key []byte, hash uint32) (*ValuePointer, uint64) {
+func (t *tablePartition) get(key []byte, hash uint32) *recordInfo {
 	_, _, nd := t.findNode(key, hash)
 	if nd != nil {
-		return nd.ptr, nd.seqNumber
+		return nd.rInfo
 	}
-	return nil, 0
+	return nil
 }
 
 // replace with Swap(key, value, func(oldValue, newValue) bool)
-func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, hash uint32) (*ValuePointer, bool) {
+func (t *tablePartition) put(key []byte, info *recordInfo, hash uint32) (*recordInfo, bool) {
 	t.resizeStep()
 
 	bucketIndex, prevNode, currNode := t.findNode(key, hash)
 
 	if currNode == nil {
-		currNode = &node{key: key}
+		currNode = &node{key: key, rInfo: info}
 
 		if t.resizeInProgress {
 			bucketHash := hash % uint32(len(t.buckets[1]))
@@ -173,10 +184,10 @@ func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, ha
 		t.nNodes.Inc()
 	}
 
-	if seqNumber >= currNode.seqNumber {
-		prev := currNode.ptr
+	if info.seqNumber >= currNode.rInfo.seqNumber {
+		prev := currNode.rInfo
 
-		if ptr == nil { // unlink if value is nil
+		if info == nil { // unlink if value is nil
 			if prevNode != nil {
 				prevNode.next = currNode.next
 			} else {
@@ -185,8 +196,8 @@ func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, ha
 			}
 			t.nNodes.Add(-1)
 		} else {
-			currNode.seqNumber = seqNumber
-			currNode.ptr = ptr
+			//currNode.seqNumber = seqNumber
+			currNode.rInfo = info
 		}
 
 		t.resizeIfNeeded()
@@ -195,7 +206,7 @@ func (t *tablePartition) put(key []byte, seqNumber uint64, ptr *ValuePointer, ha
 	}
 
 	t.resizeIfNeeded()
-	return ptr, false
+	return info, false
 }
 
 func (t *tablePartition) resizeStep() {
@@ -239,11 +250,10 @@ func (t *tablePartition) resizeIfNeeded() {
 }
 
 func (t *tablePartition) containsKey(key []byte, hash uint32) bool {
-	ptr, _ := t.get(key, hash)
-	return ptr != nil
+	return t.get(key, hash) != nil
 }
 
-func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *ValuePointer {
+func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *recordInfo {
 	t.resizeStep()
 
 	_, _, nd := t.findNode(key, hash)
@@ -251,16 +261,13 @@ func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *ValuePo
 		return nil
 	}
 
-	if seqNum >= nd.seqNumber {
-		removePtr := nd.ptr
-
-		nd.markDeleted()
-
-		if removePtr != nil {
+	if seqNum >= nd.rInfo.seqNumber {
+		oldInfo := nd.rInfo
+		if !oldInfo.deleted() {
+			nd.rInfo = nd.rInfo.markDeleted()
 			t.nElements.Add(-1)
+			return oldInfo
 		}
-		return removePtr
 	}
-
 	return nil
 }

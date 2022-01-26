@@ -110,8 +110,8 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 			return err
 		}
 
-		_, seqNumber := fc.db.table.Get(entry.Key)
-		if entry.SeqNumber == seqNumber { // record is not stale
+		rInfo := fc.db.table.Get(entry.Key)
+		if rInfo != nil && entry.SeqNumber == rInfo.seqNumber { // record is not stale
 			if err := fc.ensureRoomForWrite(entry.ValueSize); err != nil {
 				return err
 			}
@@ -140,7 +140,7 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 				}
 			}
 
-			if _, ok := fc.db.table.Put(entry.Key, entry.SeqNumber, newPtr); ok {
+			if _, ok := fc.db.table.Put(entry.Key, &recordInfo{seqNumber: entry.SeqNumber, ptr: newPtr}); ok {
 				nRecordCopied++
 			} else {
 				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.ValueSize)

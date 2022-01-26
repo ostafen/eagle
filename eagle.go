@@ -359,10 +359,10 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	seqNumber := db.getSeqNumber()
 	ptr, err := db.writeRecordToFile(&Record{Key: key, Value: value, SeqNumber: seqNumber})
-	oldPtr, _ := db.table.Put(key, seqNumber, ptr)
+	oldInfo, _ := db.table.Put(key, &recordInfo{ptr: ptr, seqNumber: seqNumber})
 
-	if oldPtr != nil {
-		db.markPreviousAsStale(oldPtr.FileId, recordSize(len(key), int(oldPtr.valueSize)))
+	if oldInfo != nil {
+		db.markPreviousAsStale(oldInfo.ptr.FileId, recordSize(len(key), int(oldInfo.ptr.valueSize)))
 	}
 	return err
 }
@@ -377,12 +377,12 @@ func (db *DB) readFile(ptr *ValuePointer) ([]byte, error) {
 
 // Get returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	ptr, _ := db.table.Get(key)
-	if ptr == nil {
+	info := db.table.Get(key)
+	if info == nil || info.deleted() {
 		return nil, nil
 	}
 
-	value, err := db.readFile(ptr)
+	value, err := db.readFile(info.ptr)
 	if errors.Is(err, os.ErrClosed) {
 		// retry
 	}
@@ -395,12 +395,12 @@ func (db *DB) Remove(key []byte) error {
 	defer db.writeLock.Unlock()
 
 	seqNumber := db.getSeqNumber()
-	ptr := db.table.Remove(key, seqNumber)
-	if ptr == nil {
+	info := db.table.Remove(key, seqNumber)
+	if info == nil {
 		return nil
 	}
 
-	db.markPreviousAsStale(ptr.FileId, recordSize(len(key), int(ptr.valueSize)))
+	db.markPreviousAsStale(info.ptr.FileId, recordSize(len(key), int(info.ptr.valueSize)))
 	_, err := db.writeRecordToFile(&Record{Key: key, Value: nil, SeqNumber: seqNumber})
 	return err
 }
