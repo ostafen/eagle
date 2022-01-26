@@ -80,9 +80,9 @@ func (lf *logFile) AppendRecord(r *Record) (*ValuePointer, error) {
 		ValueSize:   uint32(len(r.Value)),
 	}
 
-	cipher := getCypher(getIV(lf.valueFile.iv, valueOffset))
-
 	value := r.Value
+
+	cipher := getCypher(getIV(lf.valueFile.iv, valueOffset))
 	if cipher != nil {
 		var err error
 		if value, err = cipher.Encrypt(value); err != nil {
@@ -139,12 +139,9 @@ func (lf *logFile) Close() error {
 }
 
 func (lf *logFile) remove() error {
-	lf.Close()
-
 	if err := lf.keyFile.Remove(); err != nil {
 		return err
 	}
-
 	return lf.valueFile.Remove()
 }
 
