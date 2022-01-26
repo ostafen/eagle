@@ -13,11 +13,11 @@ type recordInfo struct {
 	ptr       *ValuePointer
 }
 
-func (info *recordInfo) markDeleted() *recordInfo {
+func (info *recordInfo) markDeleted(seqNum uint64) *recordInfo {
 	newPtr := &ValuePointer{}
 	*newPtr = *info.ptr
 	newPtr.valueSize = 0
-	return &recordInfo{seqNumber: info.seqNumber, ptr: newPtr}
+	return &recordInfo{seqNumber: seqNum, ptr: newPtr}
 }
 
 func (info *recordInfo) deleted() bool {
@@ -189,7 +189,7 @@ func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*rec
 			return nil, false
 		}
 
-		if info == nil { // unlink if value is nil
+		if info.ptr == nil { // unlink if value is nil
 			if prevNode != nil {
 				prevNode.next = currNode.next
 			} else {
@@ -198,9 +198,15 @@ func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*rec
 			}
 			t.nNodes.Add(-1)
 		}
+
+		if prevInfo.deleted() && info.ptr != nil {
+			t.nElements.Inc()
+		}
 	}
 
-	currNode.rInfo = info
+	if info.ptr != nil {
+		currNode.rInfo = info
+	}
 
 	t.resizeIfNeeded()
 	return prevInfo, true
@@ -261,7 +267,7 @@ func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *recordI
 	if seqNum >= nd.rInfo.seqNumber {
 		oldInfo := nd.rInfo
 		if !oldInfo.deleted() {
-			nd.rInfo = nd.rInfo.markDeleted()
+			nd.rInfo = nd.rInfo.markDeleted(seqNum)
 			t.nElements.Add(-1)
 			return oldInfo
 		}
