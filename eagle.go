@@ -16,6 +16,7 @@ import (
 
 var (
 	errKeySize         = errors.New("key is too large")
+	errGetMaxAttempts  = errors.New("max get attempts exceeded")
 	errNoEncryptionKey = errors.New("no encryption key provided")
 )
 
@@ -375,8 +376,17 @@ func (db *DB) readFile(ptr *ValuePointer) ([]byte, error) {
 	return file.ReadPointer(ptr)
 }
 
+const (
+	maxGetAttempts        = 5
+	getAttemptSleepMillis = 100
+)
+
 // Get returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.
-func (db *DB) Get(key []byte) ([]byte, error) {
+func (db *DB) get(key []byte, attempt int) ([]byte, error) {
+	if attempt > maxGetAttempts {
+		return nil, errGetMaxAttempts
+	}
+
 	info := db.table.Get(key)
 	if info == nil || info.deleted() {
 		return nil, nil
@@ -384,9 +394,15 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 	value, err := db.readFile(info.ptr)
 	if errors.Is(err, os.ErrClosed) {
-		// retry
+		time.Sleep(time.Millisecond * getAttemptSleepMillis)
+		return db.get(key, attempt+1)
 	}
 	return value, err
+}
+
+// Get returns the value to which the specified key is mapped, or null if this map contains no mapping for the key.
+func (db *DB) Get(key []byte) ([]byte, error) {
+	return db.get(key, 0)
 }
 
 // Remove removes the mapping for a key from the map if it is present.
