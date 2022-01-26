@@ -15,9 +15,8 @@ import (
 )
 
 var (
-	errKeySize         = errors.New("key is too large")
-	errGetMaxAttempts  = errors.New("max get attempts exceeded")
-	errNoEncryptionKey = errors.New("no encryption key provided")
+	errKeySize        = errors.New("key is too large")
+	errGetMaxAttempts = errors.New("max get attempts exceeded")
 )
 
 var dbOptions Options
@@ -161,11 +160,15 @@ func (db *DB) processIndexFiles() error {
 	// waiting for all loaders to exit successfully
 	wg.Wait()
 
+	nProcessed := 0
+	nTombstones := 0
 	for _, t := range tasks {
 		if t.err != nil {
 			return t.err
 		}
 
+		nProcessed += t.nProcessed
+		nTombstones += t.nTombstones
 		if t.maxSeqNumber > db.nextSeqNumber {
 			db.nextSeqNumber = t.maxSeqNumber
 		}
@@ -173,6 +176,8 @@ func (db *DB) processIndexFiles() error {
 
 	loadTime := time.Since(start)
 	log.Printf("loaded %d elements in %f seconds", db.table.Size(), loadTime.Seconds())
+	log.Printf("found %d tombstones\n", nTombstones)
+	log.Printf("total processed: %d\n", nProcessed)
 	return nil
 }
 
@@ -316,7 +321,9 @@ func (db *DB) Close() error {
 		}
 	}
 
-	db.closeAllFiles()
+	if err := db.closeAllFiles(); err != nil {
+		db.manifest.IOError = true
+	}
 
 	db.manifest.DBOpen = false
 	return db.manifest.Save(db.rootDir)
@@ -429,6 +436,7 @@ func (db *DB) ContainsKey(key []byte) bool {
 	return db.table.ContainsKey(key)
 }
 
+// Size returns the numbers of mappings actually stored in the database.
 func (db *DB) Size() int {
 	return db.table.Size()
 }
