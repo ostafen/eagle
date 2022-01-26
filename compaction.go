@@ -3,6 +3,8 @@ package eagle
 import (
 	"log"
 	"sync"
+
+	"github.com/ostafen/eagle/util"
 )
 
 const compactFilename = "COMPACT"
@@ -33,6 +35,7 @@ type fileCompactor struct {
 	quit     chan struct{}
 	fileChan chan *logFile
 
+	currFileId    util.AtomicUint32
 	currWriteFile *logFile
 	lock          sync.Mutex
 
@@ -44,6 +47,7 @@ func newFileCompactor(db *DB) *fileCompactor {
 		db:            db,
 		quit:          make(chan struct{}, 1),
 		fileChan:      make(chan *logFile, 100),
+		compactionMap: make(map[uint32]struct{}),
 		currWriteFile: nil,
 	}
 }
@@ -59,6 +63,7 @@ func (fc *fileCompactor) rotateCurrentFile() error {
 	if err != nil {
 		return err
 	}
+	fc.currFileId.Set(newFile.FileId)
 	fc.currWriteFile = newFile
 	fc.setCompacting(fc.currWriteFile)
 	return nil
@@ -116,31 +121,30 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 				return err
 			}
 
-			value := make([]byte, entry.ValueSize)
-			if _, err := file.valueFile.ReadAt(value, int64(entry.ValueOffset)); err != nil {
-				return err
+			newInfo := &recordInfo{seqNumber: entry.SeqNumber, ptr: nil}
+
+			var value []byte = nil
+			if entry.ValueSize > 0 {
+				if value, err = file.ReadPointer(rInfo.ptr); err != nil {
+					return err
+				}
 			}
 
 			writeOffset := fc.currWriteFile.valueFile.size
-			if _, err = fc.currWriteFile.valueFile.Write(value); err != nil {
-				return err
-			}
-
 			r := &Record{Key: entry.Key, Value: value, SeqNumber: entry.SeqNumber}
 			if _, err = fc.currWriteFile.AppendRecord(r); err != nil {
 				return err
 			}
 
-			var newPtr *ValuePointer
 			if entry.ValueSize > 0 {
-				newPtr = &ValuePointer{
+				newInfo.ptr = &ValuePointer{
 					FileId:      fc.currWriteFile.FileId,
 					valueOffset: writeOffset,
 					valueSize:   entry.ValueSize,
 				}
 			}
 
-			if _, updated := fc.db.table.Update(entry.Key, &recordInfo{seqNumber: entry.SeqNumber, ptr: newPtr}); updated {
+			if _, updated := fc.db.table.Update(entry.Key, newInfo); updated {
 				nRecordCopied++
 			} else {
 				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.ValueSize)
@@ -152,6 +156,10 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 		if err := fc.currWriteFile.Sync(); err != nil {
 			return err
 		}
+	}
+
+	if err := fc.db.removeFile(file.FileId); err != nil {
+		return err
 	}
 
 	log.Printf("completed compaction of file with id %d: copied %d records.\n", file.FileId, nRecordCopied)
@@ -180,18 +188,10 @@ func (fc *fileCompactor) start() {
 	}()
 }
 
-func (fc *fileCompactor) closeFile() error {
-	if fc.currWriteFile != nil {
-		log.Println("syncing compaction file with id ", fc.currWriteFile.FileId)
-		return fc.currWriteFile.SyncAndClose()
-	}
-	return nil
-}
-
 func (fc *fileCompactor) stop() error {
 	fc.quit <- struct{}{}
 	fc.wg.Wait()
-	return fc.closeFile()
+	return nil
 }
 
 func (fc *fileCompactor) markAsCompacted(fileId uint32) {
@@ -204,14 +204,19 @@ func (fc *fileCompactor) sendFile(file *logFile) bool {
 	fc.lock.Lock()
 	defer fc.lock.Unlock()
 
+	if fc.currFileId.Get() == file.FileId {
+		return false
+	}
+
 	_, ok := fc.compactionMap[file.FileId]
 	if !ok {
 		select {
 		case fc.fileChan <- file:
+			fc.compactionMap[file.FileId] = struct{}{}
 			return true
 		default:
 			return false
 		}
 	}
-	return true
+	return false
 }
