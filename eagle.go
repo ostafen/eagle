@@ -360,7 +360,10 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	seqNumber := db.getSeqNumber()
 	ptr, err := db.writeRecordToFile(&Record{Key: key, Value: value, SeqNumber: seqNumber})
-	oldInfo, _ := db.table.Put(key, &recordInfo{ptr: ptr, seqNumber: seqNumber})
+	oldInfo, updated := db.table.Update(key, &recordInfo{ptr: ptr, seqNumber: seqNumber})
+	if !updated {
+		panic("key has not been updated")
+	}
 
 	if oldInfo != nil {
 		db.markPreviousAsStale(oldInfo.ptr.FileId, recordSize(len(key), int(oldInfo.ptr.valueSize)))

@@ -140,7 +140,7 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 				}
 			}
 
-			if _, ok := fc.db.table.Put(entry.Key, &recordInfo{seqNumber: entry.SeqNumber, ptr: newPtr}); ok {
+			if _, updated := fc.db.table.Update(entry.Key, &recordInfo{seqNumber: entry.SeqNumber, ptr: newPtr}); updated {
 				nRecordCopied++
 			} else {
 				fc.db.markPreviousAsStale(fc.currWriteFile.FileId, entry.ValueSize)

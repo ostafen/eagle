@@ -82,7 +82,7 @@ func (t *memTable) Remove(key []byte, seqNumber uint64) *recordInfo {
 	return t.partitions[p].remove(key, seqNumber, hash)
 }
 
-func (t *memTable) Put(key []byte, info *recordInfo) (*recordInfo, bool) {
+func (t *memTable) Update(key []byte, info *recordInfo) (*recordInfo, bool) {
 	hash := hashKey(key)
 
 	p := hash >> 28
@@ -90,7 +90,7 @@ func (t *memTable) Put(key []byte, info *recordInfo) (*recordInfo, bool) {
 	t.locks[p].Lock()
 	defer t.locks[p].Unlock()
 
-	return t.partitions[p].put(key, info, hash)
+	return t.partitions[p].update(key, info, hash)
 }
 
 func (t *memTable) ContainsKey(key []byte) bool {
@@ -161,14 +161,13 @@ func (t *tablePartition) get(key []byte, hash uint32) *recordInfo {
 	return nil
 }
 
-// replace with Swap(key, value, func(oldValue, newValue) bool)
-func (t *tablePartition) put(key []byte, info *recordInfo, hash uint32) (*recordInfo, bool) {
+func (t *tablePartition) update(key []byte, info *recordInfo, hash uint32) (*recordInfo, bool) {
 	t.resizeStep()
 
 	bucketIndex, prevNode, currNode := t.findNode(key, hash)
 
 	if currNode == nil {
-		currNode = &node{key: key, rInfo: info}
+		currNode = &node{key: key}
 
 		if t.resizeInProgress {
 			bucketHash := hash % uint32(len(t.buckets[1]))
@@ -184,8 +183,11 @@ func (t *tablePartition) put(key []byte, info *recordInfo, hash uint32) (*record
 		t.nNodes.Inc()
 	}
 
-	if info.seqNumber >= currNode.rInfo.seqNumber {
-		prev := currNode.rInfo
+	prevInfo := currNode.rInfo
+	if prevInfo != nil {
+		if info.seqNumber < prevInfo.seqNumber {
+			return nil, false
+		}
 
 		if info == nil { // unlink if value is nil
 			if prevNode != nil {
@@ -195,18 +197,13 @@ func (t *tablePartition) put(key []byte, info *recordInfo, hash uint32) (*record
 				t.buckets[bucketIndex][bucketHash] = currNode.next
 			}
 			t.nNodes.Add(-1)
-		} else {
-			//currNode.seqNumber = seqNumber
-			currNode.rInfo = info
 		}
-
-		t.resizeIfNeeded()
-
-		return prev, true
 	}
 
+	currNode.rInfo = info
+
 	t.resizeIfNeeded()
-	return info, false
+	return prevInfo, true
 }
 
 func (t *tablePartition) resizeStep() {

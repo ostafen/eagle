@@ -30,7 +30,7 @@ func (task *keyFileProcessTask) processFile(file *keyLog) error {
 		var prevInfo *recordInfo
 
 		if e.ValueSize > 0 {
-			prevInfo, _ = task.db.table.Put(e.Key, &recordInfo{seqNumber: e.SeqNumber, ptr: ptr})
+			prevInfo, _ = task.db.table.Update(e.Key, &recordInfo{seqNumber: e.SeqNumber, ptr: ptr})
 		} else {
 			prevInfo = task.db.table.Remove(e.Key, e.SeqNumber)
 		}
