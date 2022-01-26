@@ -341,7 +341,7 @@ func (db *DB) ensureRoomForWrite(size uint32) error {
 }
 
 func (db *DB) writeRecordToFile(r *Record) (*ValuePointer, error) {
-	if err := db.ensureRoomForWrite(uint32(RecordSize(len(r.Key), len(r.Value)))); err != nil {
+	if err := db.ensureRoomForWrite(uint32(recordSize(len(r.Key), len(r.Value)))); err != nil {
 		return nil, err
 	}
 	return db.currWriteFile.AppendRecord(r)
@@ -362,11 +362,7 @@ func (db *DB) Put(key []byte, value []byte) error {
 	oldPtr, _ := db.table.Put(key, seqNumber, ptr)
 
 	if oldPtr != nil {
-		staleSize := oldPtr.valueSize
-		if staleSize == 0 { // record was marked as deleted
-			staleSize = RecordSize(len(key), 0)
-		}
-		db.markPreviousAsStale(oldPtr.FileId, staleSize)
+		db.markPreviousAsStale(oldPtr.FileId, recordSize(len(key), int(oldPtr.valueSize)))
 	}
 	return err
 }
@@ -404,7 +400,7 @@ func (db *DB) Remove(key []byte) error {
 		return nil
 	}
 
-	db.markPreviousAsStale(ptr.FileId, ptr.valueSize)
+	db.markPreviousAsStale(ptr.FileId, recordSize(len(key), int(ptr.valueSize)))
 	_, err := db.writeRecordToFile(&Record{Key: key, Value: nil, SeqNumber: seqNumber})
 	return err
 }

@@ -36,7 +36,7 @@ func (task *keyFileProcessTask) processFile(file *keyLog) error {
 		}
 
 		if prevPtr != nil {
-			task.db.markPreviousAsStale(file.fileId, RecordSize(len(e.Key), int(e.ValueSize)))
+			task.db.markPreviousAsStale(file.fileId, recordSize(len(e.Key), int(e.ValueSize)))
 		}
 
 		if e.SeqNumber > task.maxSeqNumber {

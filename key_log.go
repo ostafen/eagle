@@ -15,7 +15,7 @@ type keyLog struct {
 	buf    bytes.Buffer
 }
 
-const entryHeaderSize = 8 + 1 + 8
+const entryHeaderSize = 8 + 1 + 4 + 4
 
 type klEntryHeader struct {
 	SeqNumber   uint64
@@ -216,6 +216,6 @@ func getPointerFromEntry(e *klEntry, fileId uint32) *ValuePointer {
 		FileId:      fileId,
 		valueOffset: uint32(e.ValueOffset),
 		valueSize:   e.ValueSize,
-		keySize:     byte(len(e.Key)),
+		//keySize:     byte(len(e.Key)),
 	}
 }

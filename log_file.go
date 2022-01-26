@@ -100,7 +100,7 @@ func (lf *logFile) AppendRecord(r *Record) (*ValuePointer, error) {
 		FileId:      lf.FileId,
 		valueOffset: valueOffset,
 		valueSize:   uint32(len(r.Value)),
-		keySize:     byte(len(r.Key)),
+		//keySize:     byte(len(r.Key)),
 	}
 
 	_, err = lf.valueFile.Write(value)

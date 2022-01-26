@@ -15,6 +15,10 @@ type node struct {
 	ptr       *ValuePointer
 }
 
+func (nd *node) markDeleted() {
+	nd.ptr = nil
+}
+
 type tablePartition struct {
 	resizeInProgress bool
 
@@ -250,7 +254,7 @@ func (t *tablePartition) remove(key []byte, seqNum uint64, hash uint32) *ValuePo
 	if seqNum >= nd.seqNumber {
 		removePtr := nd.ptr
 
-		nd.ptr = nil
+		nd.markDeleted()
 
 		if removePtr != nil {
 			t.nElements.Add(-1)

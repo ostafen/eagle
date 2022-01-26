@@ -10,7 +10,6 @@ type ValuePointer struct {
 	FileId      uint32
 	valueOffset uint32
 	valueSize   uint32
-	keySize     byte
 }
 
 type valueLog struct {
@@ -62,6 +61,6 @@ func openDataFile(path string, fileId uint32) (*valueLog, error) {
 	}, nil
 }
 
-func RecordSize(keySize int, valueSize int) uint32 {
+func recordSize(keySize int, valueSize int) uint32 {
 	return uint32(4 + entryHeaderSize + keySize + valueSize)
 }
