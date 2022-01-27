@@ -137,7 +137,7 @@ func (db *DB) openLogFiles() (uint32, error) {
 
 func (db *DB) processIndexFiles() error {
 	nTasks := runtime.NumCPU()
-	tasks := make([]*keyFileProcessTask, nTasks)
+	tasks := make([]*keyFileLoader, nTasks)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(nTasks)

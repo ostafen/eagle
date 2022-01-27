@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-type keyFileProcessTask struct {
+type keyFileLoader struct {
 	db *DB
 
 	fileChan chan *keyLog
@@ -17,7 +17,7 @@ type keyFileProcessTask struct {
 	maxSeqNumber uint64
 }
 
-func (task *keyFileProcessTask) processFile(file *keyLog) error {
+func (task *keyFileLoader) loadFile(file *keyLog) error {
 	it := file.Iterator()
 
 	nProcessed := 0
@@ -58,8 +58,8 @@ func (task *keyFileProcessTask) processFile(file *keyLog) error {
 
 const chanSize = 100
 
-func newKeyFileProcessTask(db *DB, wg *sync.WaitGroup) *keyFileProcessTask {
-	return &keyFileProcessTask{
+func newKeyFileProcessTask(db *DB, wg *sync.WaitGroup) *keyFileLoader {
+	return &keyFileLoader{
 		db:           db,
 		wg:           wg,
 		err:          nil,
@@ -68,7 +68,7 @@ func newKeyFileProcessTask(db *DB, wg *sync.WaitGroup) *keyFileProcessTask {
 	}
 }
 
-func (task *keyFileProcessTask) start() {
+func (task *keyFileLoader) start() {
 	go func() {
 		defer task.wg.Done()
 
@@ -78,7 +78,7 @@ func (task *keyFileProcessTask) start() {
 				return
 			}
 
-			err := task.processFile(file)
+			err := task.loadFile(file)
 			if err != nil {
 				task.err = err
 				return
