@@ -117,7 +117,7 @@ func (fc *fileCompactor) compactFile(file *logFile) error {
 
 		rInfo := fc.db.table.Get(entry.Key)
 		if rInfo != nil && entry.SeqNumber == rInfo.seqNumber { // record is not stale
-			if err := fc.ensureRoomForWrite(entry.ValueSize); err != nil {
+			if err := fc.ensureRoomForWrite(recordSize(len(entry.Key), int(entry.ValueSize))); err != nil {
 				return err
 			}
 
